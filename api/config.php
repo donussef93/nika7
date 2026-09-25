@@ -1,65 +1,61 @@
 <?php
-/**
- * GYMHOUSE - Database Configuration & Helpers
- */
+ini_set('display_errors', '0');
+ini_set('display_startup_errors', '0');
+error_reporting(E_ALL);
 
-// Database credentials
 define('DB_HOST', 'localhost');
-define('DB_NAME', 'gymhouse');
+define('DB_NAME', 'primonutrition');
 define('DB_USER', 'root');
 define('DB_PASS', '');
 define('DB_CHARSET', 'utf8mb4');
 
-// WhatsApp business number (international format without +)
+define('UPLOAD_DIR', dirname(__DIR__) . DIRECTORY_SEPARATOR . 'uploads' . DIRECTORY_SEPARATOR);
+define('UPLOAD_URL', 'uploads/');
 define('WHATSAPP_NUMBER', '212600000000');
 
-// CORS + JSON headers
-function setApiHeaders() {
-    header('Content-Type: application/json; charset=utf-8');
-    header('Access-Control-Allow-Origin: *');
-    header('Access-Control-Allow-Methods: GET, POST, PUT, DELETE, OPTIONS');
-    header('Access-Control-Allow-Headers: Content-Type, Authorization');
-    
-    if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
-        http_response_code(200);
-        exit;
-    }
+if (session_status() === PHP_SESSION_NONE) {
+    session_start();
 }
 
-// PDO connection
 function getDB() {
     static $pdo = null;
     if ($pdo === null) {
         try {
-            $dsn = "mysql:host=" . DB_HOST . ";dbname=" . DB_NAME . ";charset=" . DB_CHARSET;
-            $pdo = new PDO($dsn, DB_USER, DB_PASS, [
-                PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
-                PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
-                PDO::ATTR_EMULATE_PREPARES => false
-            ]);
+            $pdo = new PDO(
+                'mysql:host=' . DB_HOST . ';dbname=' . DB_NAME . ';charset=' . DB_CHARSET,
+                DB_USER, DB_PASS,
+                [
+                    PDO::ATTR_ERRMODE            => PDO::ERRMODE_EXCEPTION,
+                    PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
+                    PDO::ATTR_EMULATE_PREPARES   => false,
+                ]
+            );
         } catch (PDOException $e) {
-            http_response_code(500);
-            echo json_encode(['error' => 'Database connection failed']);
-            exit;
+            jsonOut(['error' => 'DB failed', 'detail' => $e->getMessage()], 500);
         }
     }
     return $pdo;
 }
 
-// JSON response helper
-function jsonResponse($data, $status = 200) {
-    http_response_code($status);
+function jsonOut($data, $code = 200) {
+    http_response_code($code);
+    header('Content-Type: application/json; charset=utf-8');
+    header('Access-Control-Allow-Origin: *');
+    header('Access-Control-Allow-Methods: GET, POST, PUT, DELETE, OPTIONS');
+    header('Access-Control-Allow-Headers: Content-Type');
+    header('Access-Control-Allow-Credentials: true');
     echo json_encode($data, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
     exit;
 }
 
-// Get JSON body from request
 function getJsonBody() {
     $raw = file_get_contents('php://input');
-    return json_decode($raw, true) ?? [];
+    $data = json_decode($raw, true);
+    return is_array($data) ? $data : [];
 }
 
-// Sanitize string
-function clean($str) {
-    return htmlspecialchars(strip_tags(trim($str)), ENT_QUOTES, 'UTF-8');
+function requireAdmin() {
+    if (empty($_SESSION['admin_id'])) {
+        jsonOut(['error' => 'Unauthorized'], 401);
+    }
 }

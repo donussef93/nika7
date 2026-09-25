@@ -1,117 +1,112 @@
 <?php
-/**
- * PRODUCTS API
- * GET  /api/products.php            -> list all active products
- * GET  /api/products.php?id=1       -> single product
- * GET  /api/products.php?category=force
- * POST /api/products.php            -> create (admin)
- * PUT  /api/products.php?id=1       -> update (admin)
- * DELETE /api/products.php?id=1     -> delete (admin)
- */
-
 require_once __DIR__ . '/config.php';
-setApiHeaders();
 
 $db = getDB();
 $method = $_SERVER['REQUEST_METHOD'];
 
-try {
-    switch ($method) {
-        case 'GET':
-            if (isset($_GET['id'])) {
-                $stmt = $db->prepare("SELECT * FROM products WHERE id = ? AND is_active = 1");
-                $stmt->execute([(int)$_GET['id']]);
-                $product = $stmt->fetch();
-                if (!$product) jsonResponse(['error' => 'Product not found'], 404);
-                jsonResponse($product);
-            }
-            
-            $sql = "SELECT * FROM products WHERE is_active = 1";
-            $params = [];
-            
-            if (!empty($_GET['category'])) {
-                $sql .= " AND category = ?";
-                $params[] = clean($_GET['category']);
-            }
-            
-            $sql .= " ORDER BY created_at DESC";
-            $stmt = $db->prepare($sql);
-            $stmt->execute($params);
-            jsonResponse($stmt->fetchAll());
-            break;
-        
-        case 'POST':
-            $data = getJsonBody();
-            
-            $required = ['name_fr', 'name_ar', 'price', 'category'];
-            foreach ($required as $field) {
-                if (empty($data[$field])) {
-                    jsonResponse(['error' => "Missing field: $field"], 400);
-                }
-            }
-            
-            $stmt = $db->prepare("
-                INSERT INTO products 
-                (name_fr, name_ar, description_fr, description_ar, price, old_price, category, icon, badge, rating, stock)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ");
-            $stmt->execute([
-                clean($data['name_fr']),
-                clean($data['name_ar']),
-                clean($data['description_fr'] ?? ''),
-                clean($data['description_ar'] ?? ''),
-                (float)$data['price'],
-                !empty($data['old_price']) ? (float)$data['old_price'] : null,
-                clean($data['category']),
-                clean($data['icon'] ?? 'fa-dumbbell'),
-                $data['badge'] ?? null,
-                (float)($data['rating'] ?? 5.0),
-                (int)($data['stock'] ?? 0)
-            ]);
-            
-            jsonResponse([
-                'success' => true,
-                'id' => $db->lastInsertId(),
-                'message' => 'Product created'
-            ], 201);
-            break;
-        
-        case 'PUT':
-            if (!isset($_GET['id'])) jsonResponse(['error' => 'ID required'], 400);
-            $data = getJsonBody();
-            $id = (int)$_GET['id'];
-            
-            $fields = [];
-            $values = [];
-            $allowed = ['name_fr', 'name_ar', 'description_fr', 'description_ar', 
-                        'price', 'old_price', 'category', 'icon', 'badge', 'rating', 'stock', 'is_active'];
-            
-            foreach ($allowed as $field) {
-                if (array_key_exists($field, $data)) {
-                    $fields[] = "$field = ?";
-                    $values[] = $data[$field];
-                }
-            }
-            
-            if (empty($fields)) jsonResponse(['error' => 'No fields to update'], 400);
-            
-            $values[] = $id;
-            $stmt = $db->prepare("UPDATE products SET " . implode(', ', $fields) . " WHERE id = ?");
-            $stmt->execute($values);
-            
-            jsonResponse(['success' => true, 'message' => 'Product updated']);
-            break;
-        
-        case 'DELETE':
-            if (!isset($_GET['id'])) jsonResponse(['error' => 'ID required'], 400);
-            $stmt = $db->prepare("UPDATE products SET is_active = 0 WHERE id = ?");
-            $stmt->execute([(int)$_GET['id']]);
-            jsonResponse(['success' => true, 'message' => 'Product deleted']);
-            break;
-        
-        default:
-            jsonResponse(['error' => 'Method not allowed'], 405);
+// GET
+if ($method === 'GET') {
+    if (!empty($_GET['id'])) {
+        $stmt = $db->prepare("SELECT * FROM products WHERE id = ?");
+        $stmt->execute([(int)$_GET['id']]);
+        $p = $stmt->fetch();
+        if (!$p) jsonOut(['error' => 'Not found'], 404);
+        jsonOut($p);
     }
-} catch (Exception $e) {
-    jsonResponse(['error' => 'Server error', 'details' => $e->getMessage()], 500);
+
+    if (($_GET['admin'] ?? '') === '1') {
+        requireAdmin();
+        $stmt = $db->query("SELECT * FROM products ORDER BY sort_order ASC, id ASC");
+        jsonOut($stmt->fetchAll());
+    }
+
+    $sql = "SELECT * FROM products WHERE is_active = 1";
+    $params = [];
+    if (!empty($_GET['category'])) {
+        $sql .= " AND category = ?";
+        $params[] = $_GET['category'];
+    }
+    $sql .= " ORDER BY sort_order ASC, id ASC";
+    $stmt = $db->prepare($sql);
+    $stmt->execute($params);
+    jsonOut($stmt->fetchAll());
 }
+
+// POST (create)
+if ($method === 'POST') {
+    requireAdmin();
+    $d = getJsonBody();
+
+    foreach (['name_fr','name_ar','price','category'] as $f) {
+        if (empty($d[$f])) jsonOut(['error' => "Missing: $f"], 400);
+    }
+
+    try {
+        $stmt = $db->prepare("
+            INSERT INTO products
+            (name_fr, name_ar, description_fr, description_ar, price, old_price,
+             category, icon, image_path, badge, rating, stock, unit, protein_info, sort_order)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        ");
+        $stmt->execute([
+            $d['name_fr'],
+            $d['name_ar'],
+            $d['description_fr'] ?? '',
+            $d['description_ar'] ?? '',
+            (float)$d['price'],
+            !empty($d['old_price']) ? (float)$d['old_price'] : null,
+            $d['category'],
+            $d['icon']         ?? 'fa-flask',
+            !empty($d['image_path']) ? $d['image_path'] : null,
+            !empty($d['badge']) ? $d['badge'] : null,
+            (float)($d['rating'] ?? 5.0),
+            (int)($d['stock']   ?? 0),
+            !empty($d['unit']) ? $d['unit'] : null,
+            !empty($d['protein_info']) ? $d['protein_info'] : null,
+            (int)($d['sort_order'] ?? 0)
+        ]);
+        jsonOut(['success' => true, 'id' => (int)$db->lastInsertId()]);
+    } catch (Exception $e) {
+        jsonOut(['error' => 'Insert failed', 'detail' => $e->getMessage()], 500);
+    }
+}
+
+// PUT (update)
+if ($method === 'PUT') {
+    requireAdmin();
+    if (empty($_GET['id'])) jsonOut(['error' => 'ID required'], 400);
+
+    $d = getJsonBody();
+    $allowed = ['name_fr','name_ar','description_fr','description_ar','price','old_price',
+                'category','icon','image_path','badge','rating','stock','unit','protein_info',
+                'sort_order','is_active'];
+    $fields = [];
+    $values = [];
+    foreach ($allowed as $f) {
+        if (array_key_exists($f, $d)) {
+            $fields[] = "$f = ?";
+            $values[] = ($d[$f] === '') ? null : $d[$f];
+        }
+    }
+    if (!$fields) jsonOut(['error' => 'Nothing to update'], 400);
+
+    $values[] = (int)$_GET['id'];
+    try {
+        $stmt = $db->prepare("UPDATE products SET " . implode(', ', $fields) . " WHERE id = ?");
+        $stmt->execute($values);
+        jsonOut(['success' => true]);
+    } catch (Exception $e) {
+        jsonOut(['error' => 'Update failed', 'detail' => $e->getMessage()], 500);
+    }
+}
+
+// DELETE
+if ($method === 'DELETE') {
+    requireAdmin();
+    if (empty($_GET['id'])) jsonOut(['error' => 'ID required'], 400);
+    $stmt = $db->prepare("DELETE FROM products WHERE id = ?");
+    $stmt->execute([(int)$_GET['id']]);
+    jsonOut(['success' => true]);
+}
+
+jsonOut(['error' => 'Method not allowed'], 405);
